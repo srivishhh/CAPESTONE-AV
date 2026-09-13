@@ -1,0 +1,6 @@
+Retrieval Strategy,Hit Rate @ 1,Hit Rate @ 3,Hit Rate @ 5,MRR,Avg Latency (ms)
+Dense Cosine,90.9%,100.0%,100.0%,0.9545,47.5
+MMR,90.9%,100.0%,100.0%,0.9545,1289.7
+Hybrid (BM25+Dense),90.9%,100.0%,100.0%,0.9545,30.4
+Cross-Encoder Reranker,100.0%,100.0%,100.0%,1.0,1438.6
+Multi-Query,90.9%,100.0%,100.0%,0.9545,784.3
