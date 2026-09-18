@@ -1,4 +1,4 @@
-﻿"""
+"""
 Streamlit Application: Research Paper Answer Bot
 GenAI Pinnacle Plus Capstone — Advanced Option 2
 Author: Antigravity AI / Pinnacle Plus
@@ -6,9 +6,14 @@ Author: Antigravity AI / Pinnacle Plus
 import os
 import sys
 import time
+import html
+from typing import List, Dict, Any
 import streamlit as st
 import pandas as pd
 from PIL import Image
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Ensure project root is in sys.path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -31,31 +36,70 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for styling
+# Custom CSS for styling with robust theme compatibility
 st.markdown("""
 <style>
     .main-header {
         font-size: 2.2rem;
         font-weight: 700;
-        color: #1E3A8A;
+        color: #3B82F6;
         margin-bottom: 0.2rem;
     }
     .sub-header {
         font-size: 1.05rem;
-        color: #4B5563;
+        color: #94A3B8;
         margin-bottom: 1.5rem;
     }
     .source-card {
-        background-color: #F8FAFC;
-        border-left: 4px solid #2563EB;
-        padding: 12px 16px;
+        background-color: #1E293B;
+        color: #F8FAFC !important;
+        border-left: 4px solid #3B82F6;
+        padding: 14px 18px;
         margin-bottom: 12px;
+        border-radius: 6px;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+    }
+    .source-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 6px;
+    }
+    .source-title {
+        font-weight: 700;
+        font-size: 0.95rem;
+        color: #60A5FA !important;
+    }
+    .source-meta {
+        font-size: 0.84rem;
+        color: #CBD5E1 !important;
+        margin-bottom: 8px;
+        line-height: 1.5;
+    }
+    .source-meta b {
+        color: #94A3B8 !important;
+    }
+    .source-meta code {
+        background-color: #0F172A !important;
+        color: #38BDF8 !important;
+        padding: 2px 6px;
         border-radius: 4px;
+        font-size: 0.80rem;
+    }
+    .source-content {
+        font-size: 0.87rem;
+        line-height: 1.5;
+        color: #F1F5F9 !important;
+        background-color: #0F172A;
+        padding: 10px 14px;
+        border-radius: 4px;
+        border: 1px solid #334155;
     }
     .metric-badge {
-        background-color: #EFF6FF;
-        color: #1D4ED8;
-        padding: 3px 8px;
+        background-color: rgba(59, 130, 246, 0.2);
+        color: #93C5FD !important;
+        border: 1px solid rgba(59, 130, 246, 0.4);
+        padding: 2px 10px;
         border-radius: 12px;
         font-size: 0.82rem;
         font-weight: 600;
@@ -83,6 +127,109 @@ def init_rag_system():
 
 docs, chunks, retriever, rag_chain = init_rag_system()
 
+def render_source_cards(sources: List[Dict[str, Any]]):
+    """Render Top-K supporting sources with high-contrast formatting and defensive text fallbacks."""
+    for src in sources:
+        rank = src.get("rank", 1)
+        paper_title = html.escape(str(src.get("paper_title") or "Unknown Paper"))
+        page = src.get("page_number")
+        page_str = str(page) if page is not None and str(page) != "-1" else "N/A"
+        chunk_id = html.escape(str(src.get("chunk_id") or "N/A"))
+        score = src.get("score", 0.0)
+        score_str = f"{float(score):.4f}" if isinstance(score, (int, float)) else str(score)
+        passage = src.get("passage") or src.get("text", "")
+
+        if not passage or not passage.strip():
+            content_html = "<span style='color: #EF4444; font-style: italic;'>Source text unavailable</span>"
+        else:
+            clean_p = html.escape(passage.strip())
+            content_html = f'"{clean_p}"'
+
+        card_html = f"""
+        <div class='source-card'>
+            <div class='source-header'>
+                <span class='source-title'>SOURCE {rank}</span>
+                <span class='metric-badge'>Score: {score_str}</span>
+            </div>
+            <div class='source-meta'>
+                <b>Paper:</b> {paper_title}<br/>
+                <b>Page:</b> {page_str} &nbsp;|&nbsp; <b>Chunk:</b> <code>{chunk_id}</code>
+            </div>
+            <div class='source-content'>
+                <b>Content:</b><br/>
+                {content_html}
+            </div>
+        </div>
+        """
+        st.markdown(card_html, unsafe_allow_html=True)
+
+def render_debug_inspector(debug_info: Dict[str, Any], prompt_context: str = ""):
+    """Render comprehensive developer diagnostics."""
+    with st.expander("🛠️ Show RAG Debug Information", expanded=True):
+        st.markdown(f"**QUERY:** `{debug_info.get('query', '')}`")
+        if debug_info.get("matched_papers"):
+            st.markdown(f"**GENERIC PAPER TITLE MATCHES:** `{', '.join(debug_info['matched_papers'])}`")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("##### 🔹 Dense Retrieval (Top Candidates)")
+            for i, r in enumerate(debug_info.get("dense_results", []), 1):
+                cid = r.get("chunk_id") or r.get("metadata", {}).get("chunk_id", "N/A")
+                st.markdown(
+                    f"**{i}. {r.get('paper_title', 'Unknown')}** (Page {r.get('page_number', 'N/A')})\n\n"
+                    f"Score: `{r.get('score', 0.0)}` | Chunk: `{cid}`\n\n"
+                    f"> *{(r.get('text', ''))[:160]}...*"
+                )
+
+        with col2:
+            st.markdown("##### 🔸 BM25 Retrieval (Top Candidates)")
+            for i, r in enumerate(debug_info.get("bm25_results", []), 1):
+                cid = r.get("chunk_id") or "N/A"
+                st.markdown(
+                    f"**{i}. {r.get('paper_title', 'Unknown')}** (Page {r.get('page_number', 'N/A')})\n\n"
+                    f"Score: `{r.get('score', 0.0)}` | Chunk: `{cid}`\n\n"
+                    f"> *{(r.get('text', ''))[:160]}...*"
+                )
+
+        st.markdown("##### ⚡ Hybrid / Fused Retrieval")
+        for i, r in enumerate(debug_info.get("hybrid_results", []), 1):
+            cid = r.get("chunk_id") or "N/A"
+            st.markdown(
+                f"**{i}. {r.get('paper_title', 'Unknown')}** (Page {r.get('page_number', 'N/A')})\n\n"
+                f"Fused Score: `{r.get('score', 0.0)}` | Chunk: `{cid}`\n\n"
+                f"> *{(r.get('text', ''))[:200]}...*"
+            )
+
+        st.markdown("##### 📄 Final Context Passed to LLM")
+        st.text_area("Exact Context Text", value=prompt_context, height=180, disabled=True)
+
+        st.markdown("##### 🏷️ Source Metadata (Complete Schema)")
+        for i, r in enumerate(debug_info.get("final_hits", []), 1):
+            with st.expander(f"Metadata — [{i}] {r.get('paper_title')} (p.{r.get('page_number')})"):
+                st.json({
+                    "chunk_id": r.get("chunk_id"),
+                    "paper_id": r.get("paper_id") or r.get("source_file"),
+                    "paper_title": r.get("paper_title"),
+                    "authors": r.get("authors"),
+                    "year": r.get("year"),
+                    "page_number": r.get("page_number"),
+                    "source_file": r.get("source_file"),
+                    "score": r.get("score"),
+                    "strategy": r.get("strategy")
+                })
+
+@st.cache_data
+def get_benchmark_dataframe(csv_path: str):
+    if os.path.exists(csv_path):
+        return pd.read_csv(csv_path)
+    return None
+
+@st.cache_data
+def get_eda_plots(eda_dir: str):
+    if os.path.exists(eda_dir):
+        return sorted([f for f in os.listdir(eda_dir) if f.endswith(".png")])
+    return []
+
 # -------------------------------------------------------------
 # SIDEBAR CONTROLS
 # -------------------------------------------------------------
@@ -93,17 +240,21 @@ with st.sidebar:
     selected_strategy = st.selectbox(
         "Retrieval Strategy",
         options=[
-            "Cross-Encoder Reranker (Recommended)",
-            "Hybrid (BM25 + Dense RRF)",
+            "Hybrid (BM25 + Dense RRF) (⚡ Ultra-Fast ~30ms)",
+            "Cross-Encoder Reranker (🎯 High Accuracy)",
             "Dense Cosine Similarity",
             "Maximal Marginal Relevance (MMR)",
             "Multi-Query Expansion"
         ],
         index=0,
-        help="Select the retrieval algorithm used to select context passages."
+        help="Select the retrieval algorithm. Hybrid Search provides sub-second query latency with high accuracy."
     )
 
     top_k = st.slider("Top Supporting Passages (k)", min_value=1, max_value=5, value=3)
+
+    st.markdown("---")
+    st.markdown("### 🛠️ Developer Diagnostics")
+    show_debug = st.checkbox("Show RAG Debug Information", value=False, help="Inspect raw Dense, BM25, Hybrid retrieval, context, and LLM prompt.")
 
     st.markdown("---")
     st.markdown("### 📑 Indexed Paper Library")
@@ -138,7 +289,9 @@ with tab_chat:
             {
                 "role": "assistant",
                 "content": "Hello! I am your Research Paper Answer Bot. Ask me any question about **Transformers**, **BERT**, **RAG**, **LoRA**, or **LLaMA**, and I will provide factually grounded answers with exact paper and page citations.",
-                "sources": []
+                "sources": [],
+                "debug_info": None,
+                "context_prompt": ""
             }
         ]
 
@@ -148,13 +301,9 @@ with tab_chat:
             st.markdown(msg["content"])
             if msg.get("sources"):
                 with st.expander(f"📚 Top-{len(msg['sources'])} Supporting Sources", expanded=False):
-                    for src in msg["sources"]:
-                        st.markdown(f"""
-                        <div class='source-card'>
-                            <b>[{src['rank']}] {src['paper_title']}</b> — Page {src['page_number']} <span class='metric-badge'>Score: {src['score']}</span><br/>
-                            <i>"{src['passage']}"</i>
-                        </div>
-                        """, unsafe_allow_html=True)
+                    render_source_cards(msg["sources"])
+            if show_debug and msg.get("debug_info"):
+                render_debug_inspector(msg["debug_info"], msg.get("context_prompt", ""))
 
     # Sample queries shortcuts
     st.markdown("**Try a sample question:**")
@@ -175,32 +324,38 @@ with tab_chat:
         with st.chat_message("user"):
             st.markdown(user_input)
 
-        # Generate response
+        # Generate response with real-time streaming
         with st.chat_message("assistant"):
-            with st.spinner(f"Retrieving passages via {selected_strategy} & synthesizing grounded answer..."):
+            clean_strategy = selected_strategy.split("(")[0].strip().lower()
+            with st.spinner(f"Retrieving context passages via {selected_strategy.split('(')[0].strip()}..."):
                 t_start = time.time()
-                strategy_key = selected_strategy.lower()
-                result = rag_chain.generate_answer(user_input, strategy=strategy_key, top_k=top_k)
-                latency = round(time.time() - t_start, 2)
+                debug_info = retriever.retrieve_with_debug(user_input, strategy=clean_strategy, top_k=top_k)
+                hits = debug_info["final_hits"]
+                context_prompt = rag_chain.build_prompt(user_input, hits)
+            
+            # Stream the generated answer directly into the UI
+            stream_gen = rag_chain.stream_answer(user_input, hits)
+            answer_text = st.write_stream(stream_gen)
+            latency = round(time.time() - t_start, 2)
 
-                st.markdown(result["answer"])
-                st.caption(f"⚡ Generated in {latency}s via **{selected_strategy}**")
+            st.caption(f"⚡ Generated in {latency}s via **{selected_strategy.split('(')[0].strip()}**")
 
-                if result["top_sources"]:
-                    with st.expander(f"📚 Top-{len(result['top_sources'])} Supporting Sources", expanded=True):
-                        for src in result["top_sources"]:
-                            st.markdown(f"""
-                            <div class='source-card'>
-                                <b>[{src['rank']}] {src['paper_title']}</b> — Page {src['page_number']} <span class='metric-badge'>Score: {src['score']}</span><br/>
-                                <i>"{src['passage']}"</i>
-                            </div>
-                            """, unsafe_allow_html=True)
+            top_sources = rag_chain.format_citations(hits, clean_strategy)
+            if top_sources:
+                with st.expander(f"📚 Top-{len(top_sources)} Supporting Sources", expanded=True):
+                    render_source_cards(top_sources)
+
+            if show_debug:
+                render_debug_inspector(debug_info, context_prompt)
 
         st.session_state.messages.append({
             "role": "assistant",
-            "content": result["answer"],
-            "sources": result["top_sources"]
+            "content": answer_text,
+            "sources": top_sources,
+            "debug_info": debug_info,
+            "context_prompt": context_prompt
         })
+        rag_chain.chat_history.append({"user": user_input, "assistant": answer_text})
 
 # TAB 2: Retrieval Benchmark
 with tab_benchmark:
@@ -208,8 +363,8 @@ with tab_benchmark:
     st.markdown("Comparison across **5 distinct retrieval strategies** on the 12-query benchmark suite:")
 
     summary_csv = os.path.join(project_dir, "data", "eval_results", "evaluation_summary.csv")
-    if os.path.exists(summary_csv):
-        df_bench = pd.read_csv(summary_csv)
+    df_bench = get_benchmark_dataframe(summary_csv)
+    if df_bench is not None:
         st.dataframe(df_bench, use_container_width=True)
 
         colA, colB = st.columns(2)
@@ -226,11 +381,9 @@ with tab_benchmark:
 with tab_eda:
     st.header("📈 Research Paper Dataset Exploratory Data Analysis")
     eda_dir = os.path.join(project_dir, "data", "eda_plots")
-    
-    if os.path.exists(eda_dir):
-        plot_files = sorted([f for f in os.listdir(eda_dir) if f.endswith(".png")])
-        for p in plot_files:
-            p_path = os.path.join(eda_dir, p)
-            st.image(p_path, caption=p.replace(".png", "").replace("_", " ").title(), use_container_width=True)
+    plot_files = get_eda_plots(eda_dir)
+    if plot_files:
+        selected_plot = st.selectbox("Select EDA Visualization", options=plot_files)
+        st.image(os.path.join(eda_dir, selected_plot), use_container_width=True)
     else:
-        st.info("Run `python -m src.eda` to generate EDA visual plots.")
+        st.info("No EDA plots found. Generate via `python -m src.eda`.")

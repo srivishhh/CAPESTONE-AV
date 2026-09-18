@@ -1,4 +1,4 @@
-﻿"""
+"""
 Vector Store Module (ChromaDB)
 Indexes all document chunks with rich citation metadata into persistent ChromaDB collections.
 """
@@ -68,7 +68,7 @@ class VectorStoreManager:
         print(f"Indexing complete. Total indexed chunks: {self.collection.count()}")
 
     def similarity_search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
-        """Query ChromaDB using dense cosine similarity."""
+        """Query ChromaDB using dense cosine similarity with complete metadata preservation."""
         q_emb = self.embedder.embed_query(query)
         results = self.collection.query(
             query_embeddings=[q_emb],
@@ -81,19 +81,26 @@ class VectorStoreManager:
             docs = results["documents"][0]
             metas = results["metadatas"][0]
             dists = results["distances"][0]
-            for doc, meta, dist in zip(docs, metas, dists):
-                # Chroma distance for cosine: distance = 1 - cosine_similarity
-                sim_score = max(0.0, 1.0 - dist)
-                hits.append({
+            ids = results.get("ids", [[]])[0]
+            for i, (doc, meta, dist) in enumerate(zip(docs, metas, dists)):
+                cid = ids[i] if i < len(ids) else meta.get("chunk_id", f"chunk_{i}")
+                # Chroma collection space is L2 by default: squared Euclidean distance dist in [0, 4] for normalized embs.
+                # Cosine similarity = 1 - (dist / 2.0)
+                sim_score = max(0.0, min(1.0, 1.0 - (float(dist) / 2.0)))
+                hit_dict = {
+                    "chunk_id": cid,
+                    "paper_id": meta.get("source", ""),
+                    "paper_title": meta.get("paper_title", ""),
+                    "authors": meta.get("authors", "Unknown"),
+                    "year": meta.get("year", 2024),
+                    "page_number": meta.get("page_number", -1),
+                    "source_file": meta.get("source", ""),
+                    "source": meta.get("source", ""),
                     "text": doc,
-                    "paper_title": meta["paper_title"],
-                    "source": meta["source"],
-                    "page_number": meta["page_number"],
-                    "authors": meta["authors"],
-                    "year": meta["year"],
                     "score": round(sim_score, 4),
                     "metadata": meta
-                })
+                }
+                hits.append(hit_dict)
         return hits
 
 if __name__ == "__main__":
